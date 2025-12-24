@@ -1,0 +1,85 @@
+# Makefile for building avl6381/it930x on Ubuntu 24.04 (and other modern Linux)
+# This makefile downloads the necessary kernel headers from upstream because
+# distros usually don't package internal DVB driver headers (dvb-usb-v2).
+
+# 1. Detect Kernel Version
+KVER ?= $(shell uname -r)
+# Extract Major.Minor for vanilla kernel download (e.g. 6.8.0-31 -> 6.8)
+# If KVER is 6.8.0-31-generic, we want 6.8
+VANILLA_VER ?= $(shell echo $(KVER) | cut -d- -f1 | cut -d. -f1,2)
+MAJOR_VER := $(shell echo $(VANILLA_VER) | cut -d. -f1)
+
+# Url for kernel source
+URL := https://www.kernel.org/pub/linux/kernel/v$(MAJOR_VER).x
+KERNEL_TAR := linux-$(VANILLA_VER).tar.xz
+
+# Directories
+PWD := $(shell pwd)
+DL_DIR := $(PWD)/dl
+DVB_HEADERS_DIR := $(PWD)/dvb_headers
+
+# Objects to build
+obj-m += avl6381.o
+obj-m += it930x.o
+obj-m += mxl603.o
+
+mxl603-objs := mxl603_tuner.o mxl603_api.o
+
+# Add local header search path
+ccflags-y += -I$(DVB_HEADERS_DIR)
+ccflags-y += -I$(DVB_HEADERS_DIR)/dvb-usb
+ccflags-y += -I$(DVB_HEADERS_DIR)/dvb-usb-v2
+ccflags-y += -I$(DVB_HEADERS_DIR)/dvb-frontends
+ccflags-y += -I$(DVB_HEADERS_DIR)/tuners
+# Add other standard DVB include paths (mimicking kernel tree)
+ccflags-y += -I$(DVB_HEADERS_DIR)/include
+
+# Main targets
+all: prepare
+	@echo "Building modules for kernel $(KVER)..."
+	make -C /lib/modules/$(KVER)/build M=$(PWD) LLVM=1 modules
+
+prepare: $(DVB_HEADERS_DIR)/.ready
+
+$(DVB_HEADERS_DIR)/.ready:
+	@echo "Preparing headers from $(KERNEL_TAR)..."
+	rm -rf $(DVB_HEADERS_DIR)
+	mkdir -p $(DL_DIR)
+	mkdir -p $(DVB_HEADERS_DIR)
+	
+	@if [ ! -f $(DL_DIR)/$(KERNEL_TAR) ]; then \
+		echo "Downloading kernel source $(VANILLA_VER) ..."; \
+		wget -c $(URL)/$(KERNEL_TAR) -O $(DL_DIR)/$(KERNEL_TAR); \
+	fi
+	
+	@echo "Extracting DVB headers..."
+	# We maintain the directory structure (dvb-usb-v2, dvb-frontends, etc.) inside dvb_headers
+	# by stripping 4 components: linux-X.Y/drivers/media/usb/ -> dvb-usb-v2/
+	
+	# Extract dvb-usb-v2 headers
+	tar xf $(DL_DIR)/$(KERNEL_TAR) -C $(DVB_HEADERS_DIR) --wildcards \
+		--strip-components=4 \
+		linux-$(VANILLA_VER)/drivers/media/usb/dvb-usb-v2/*.h || true
+		
+	# Extract legacy dvb-usb headers (some drivers might need them)
+	tar xf $(DL_DIR)/$(KERNEL_TAR) -C $(DVB_HEADERS_DIR) --wildcards \
+		--strip-components=4 \
+		linux-$(VANILLA_VER)/drivers/media/usb/dvb-usb/*.h || true
+		
+	# Extract frontend and tuner headers
+	# strip-components=4: linux-X.Y/drivers/media/dvb-frontends -> dvb-frontends/
+	# strip-components=4: linux-X.Y/drivers/media/tuners -> tuners/
+	tar xf $(DL_DIR)/$(KERNEL_TAR) -C $(DVB_HEADERS_DIR) --wildcards \
+		--strip-components=4 \
+		linux-$(VANILLA_VER)/drivers/media/dvb-frontends/*.h \
+		linux-$(VANILLA_VER)/drivers/media/tuners/*.h || true
+
+	touch $(DVB_HEADERS_DIR)/.ready
+
+clean:
+	make -C /lib/modules/$(KVER)/build M=$(PWD) LLVM=1 clean
+	rm -rf $(DVB_HEADERS_DIR)
+
+install:
+	make -C /lib/modules/$(KVER)/build M=$(PWD) LLVM=1 modules_install
+	depmod -a
