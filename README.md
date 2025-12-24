@@ -1,5 +1,6 @@
 # Linux DVB driver for runqida (AVL6381+MXL603+IT9303) DVBC/DTMB/DVBT2 demodulator USB dongle
-
+#### 直接编译并安装到ubuntu24 server中
+直接运行build_install.sh 只在最新内核6.18测试过。其它内核未测试
 #### ubuntu上使用openwrt SDK交叉编译
 
 ```shell
